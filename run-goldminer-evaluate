@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
+
+if [ ! -x "$PYTHON_BIN" ]; then
+    echo "goldminer-evaluate: virtual environment not found at $PROJECT_DIR/.venv" >&2
+    exit 2
+fi
+
+cd "$PROJECT_DIR"
+exec "$PYTHON_BIN" -m goldminer.evaluation.cli "$@"

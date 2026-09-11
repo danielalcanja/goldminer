@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "final_ranking": [
+    {"rank": 1, "id": "c1", "start_ms": 1000, "end_ms": 11000},
+    {"rank": 2, "id": "c2", "start_ms": 20000, "end_ms": 30000}
+  ]
+}

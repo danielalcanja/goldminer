@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "podcast-gold-miner"
+version = "0.1.0"
+description = "Local-first podcast clip discovery and cutting pipeline"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Podcast Gold Miner"}]
+dependencies = []
+
+[project.scripts]
+goldminer = "goldminer.cli:main"
+goldminer-evaluate = "goldminer.evaluation.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["goldminer*"]

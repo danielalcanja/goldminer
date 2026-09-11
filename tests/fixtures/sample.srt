@@ -1,0 +1,7 @@
+1
+00:00:00,500 --> 00:00:02,000
+Daniel: I thought the hard part was writing the code.
+
+2
+00:00:02,000 --> 00:00:04,500
+Then I realized the real problem was deciding what to build.

@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "dataset_name": "synthetic-regression-fixture",
+  "match_overlap_threshold": 0.5,
+  "episode_count": 1,
+  "completed_episode_count": 1,
+  "metrics": {
+    "recall_at_10": 1.0,
+    "precision_at_5": 1.0,
+    "ndcg_at_10": 1.0,
+    "boundary_error_seconds": 0.0,
+    "duplicate_rate": 0.0,
+    "run_reliability": 1.0
+  },
+  "episodes": [],
+  "errors": [],
+  "note": "Synthetic test baseline only; not evidence of production editorial quality."
+}

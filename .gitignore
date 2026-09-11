@@ -1,0 +1,13 @@
+.env
+.venv/
+.DS_Store
+__pycache__/
+*.py[cod]
+*_gold/
+*_clips/
+transcription_cache/
+analysis_cache/
+scoring_cache/
+dist/
+build/
+*.egg-info/

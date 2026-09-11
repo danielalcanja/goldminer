@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "name": "synthetic-regression-fixture",
+  "episodes": [
+    {
+      "id": "fixture-episode",
+      "ranking_path": "evaluation_ranking.json",
+      "gold_moments": [
+        {"id": "gold-1", "start_ms": 1000, "end_ms": 11000, "relevance": 3, "idea_group": "lesson-a"},
+        {"id": "gold-2", "start_ms": 20000, "end_ms": 30000, "relevance": 2, "idea_group": "lesson-b"}
+      ]
+    }
+  ]
+}
