@@ -131,6 +131,7 @@ async function r2Json(bucket: R2Bucket, key: string): Promise<unknown | null> {
 
 export class GoldMinerContainer extends Container {
   defaultPort = 8080;
+  requiredPorts = [8080];
   sleepAfter = "4h";
   envVars = {
     OPENAI_API_KEY: env.OPENAI_API_KEY,
@@ -155,6 +156,14 @@ export class GoldMinerWorkflow extends WorkflowEntrypoint<Bindings, JobRequest> 
           this.env.GOLDMINER_CONTAINER,
           containerSlot(event.instanceId),
         );
+        await container.startAndWaitForPorts({
+          ports: 8080,
+          cancellationOptions: {
+            instanceGetTimeoutMS: 120_000,
+            portReadyTimeoutMS: 120_000,
+            waitInterval: 500,
+          },
+        });
         const response = await container.fetch(
           new Request("http://container/run", {
             method: "POST",
