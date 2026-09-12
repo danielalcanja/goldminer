@@ -4,6 +4,7 @@ from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
+import os
 import threading
 from typing import Any
 from urllib.parse import urlsplit
@@ -15,6 +16,20 @@ from .service import JobService
 
 _LOG = logging.getLogger(__name__)
 _MAX_REQUEST_BYTES = 64 * 1024
+_SECRET_ENV_NAMES = (
+    "OPENAI_API_KEY",
+    "R2_ACCESS_KEY_ID",
+    "R2_SECRET_ACCESS_KEY",
+)
+
+
+def _safe_exception_message(exc: Exception) -> str:
+    message = str(exc).strip() or "no exception message"
+    for name in _SECRET_ENV_NAMES:
+        value = os.environ.get(name, "")
+        if value:
+            message = message.replace(value, f"<{name} redacted>")
+    return f"{type(exc).__name__}: {message}"[:1000]
 
 
 class JobHTTPServer(ThreadingHTTPServer):
@@ -83,6 +98,15 @@ class JobRequestHandler(BaseHTTPRequestHandler):
         except GoldMinerError as exc:
             _LOG.exception("Job %s failed", spec.job_id)
             self._json(500, {"error": "job_failed", "message": str(exc)})
+        except Exception as exc:
+            _LOG.exception("Job %s failed unexpectedly", spec.job_id)
+            self._json(
+                500,
+                {
+                    "error": "unexpected_worker_failure",
+                    "message": _safe_exception_message(exc),
+                },
+            )
         except BaseException:
             _LOG.exception("Job %s failed unexpectedly", spec.job_id)
             self._json(500, {"error": "job_failed", "message": "Unexpected worker failure"})

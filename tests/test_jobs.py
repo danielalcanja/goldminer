@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from goldminer.errors import GoldMinerError
 from goldminer.jobs.models import JobSpec
 from goldminer.jobs.runner import ProcessResult, SubprocessGoldMinerRunner
-from goldminer.jobs.server import JobHTTPServer
+from goldminer.jobs.server import JobHTTPServer, _safe_exception_message
 from goldminer.jobs.service import JobService
 
 
@@ -210,6 +212,26 @@ class JobServiceTests(unittest.TestCase):
 
 
 class JobHTTPServerTests(unittest.TestCase):
+    def test_unexpected_error_diagnostic_redacts_credentials(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "OPENAI_API_KEY": "openai-secret",
+                "R2_ACCESS_KEY_ID": "r2-access-secret",
+                "R2_SECRET_ACCESS_KEY": "r2-secret-secret",
+            },
+        ):
+            message = _safe_exception_message(
+                RuntimeError(
+                    "failed with openai-secret, r2-access-secret, and r2-secret-secret"
+                )
+            )
+
+        self.assertIn("RuntimeError", message)
+        self.assertNotIn("openai-secret", message)
+        self.assertNotIn("r2-access-secret", message)
+        self.assertNotIn("r2-secret-secret", message)
+
     def test_service_configuration_is_lazy_so_the_container_can_boot(self) -> None:
         calls = 0
 
