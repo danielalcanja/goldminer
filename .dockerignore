@@ -1,0 +1,14 @@
+.git
+.env
+.venv
+__pycache__
+*.py[cod]
+*_gold
+*_clips
+analysis_cache
+build
+dist
+scoring_cache
+transcription_cache
+*.egg-info
+tests

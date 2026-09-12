@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "goldminer-jobs",
+  "main": "cloudflare/src/index.ts",
+  "compatibility_date": "2026-09-11",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "R2_BUCKET": "goldminer-media"
+  },
+  "r2_buckets": [
+    {
+      "binding": "MEDIA_BUCKET",
+      "bucket_name": "goldminer-media"
+    }
+  ],
+  "containers": [
+    {
+      "class_name": "GoldMinerContainer",
+      "image": "./Dockerfile",
+      "max_instances": 3,
+      "instance_type": "standard-3"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GOLDMINER_CONTAINER",
+        "class_name": "GoldMinerContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GoldMinerContainer"]
+    }
+  ],
+  "workflows": [
+    {
+      "name": "goldminer-jobs",
+      "binding": "GOLDMINER_WORKFLOW",
+      "class_name": "GoldMinerWorkflow"
+    }
+  ]
+}

@@ -1,4 +1,6 @@
 .env
+.dev.vars
+.env.worker
 .venv/
 .DS_Store
 __pycache__/
@@ -11,3 +13,5 @@ scoring_cache/
 dist/
 build/
 *.egg-info/
+node_modules/
+.wrangler/

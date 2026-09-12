@@ -6,6 +6,12 @@ This repository currently implements **Milestones 1–6: the complete local prod
 
 Every invocation appends structured diagnostics to `logs/run.jsonl`. The log contains stage timings, tool paths, media duration, cache decisions, artifact paths, transcript counts, and recoverable errors. It intentionally excludes transcript contents and credentials. Share this file when asking for help verifying a run.
 
+## Cloudflare background worker
+
+The repository also contains a deployable Cloudflare adapter. It keeps the local `goldminer VIDEO` command unchanged, packages it with FFmpeg in a Linux container, and uses Cloudflare Workflows plus R2 to run one asynchronous video job per container instance.
+
+See [docs/CLOUDFLARE_DEPLOYMENT.md](docs/CLOUDFLARE_DEPLOYMENT.md) for architecture, setup, deployment, and a complete test request.
+
 ## Automatic transcription with OpenAI
 
 When `--transcript` is omitted, Gold Miner uses the OpenAI Transcription API with `gpt-4o-transcribe-diarize`. Copy the example configuration and put the key in the ignored `.env` file:

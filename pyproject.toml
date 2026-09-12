@@ -12,9 +12,16 @@ license = {text = "MIT"}
 authors = [{name = "Podcast Gold Miner"}]
 dependencies = []
 
+[project.optional-dependencies]
+worker = ["boto3>=1.35,<2"]
+
 [project.scripts]
 goldminer = "goldminer.cli:main"
 goldminer-evaluate = "goldminer.evaluation.cli:main"
+goldminer-worker = "goldminer.jobs.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["goldminer*"]
+
+[tool.setuptools.package-data]
+goldminer = ["prompts/*.md"]
