@@ -8,6 +8,7 @@ import unittest
 from goldminer.errors import GoldMinerError
 from goldminer.jobs.models import JobSpec
 from goldminer.jobs.runner import ProcessResult, SubprocessGoldMinerRunner
+from goldminer.jobs.server import JobHTTPServer
 from goldminer.jobs.service import JobService
 
 
@@ -206,6 +207,27 @@ class JobServiceTests(unittest.TestCase):
             self.assertEqual(result.job_id, "retry-job")
             self.assertEqual(runner.calls[0]["output"], runner.calls[1]["output"])
             self.assertFalse((Path(temporary) / "retry-job").exists())
+
+
+class JobHTTPServerTests(unittest.TestCase):
+    def test_service_configuration_is_lazy_so_the_container_can_boot(self) -> None:
+        calls = 0
+
+        def unavailable_service() -> JobService:
+            nonlocal calls
+            calls += 1
+            raise GoldMinerError("missing worker configuration")
+
+        server = JobHTTPServer(
+            ("127.0.0.1", 0), unavailable_service, bind_and_activate=False
+        )
+        try:
+            self.assertEqual(calls, 0)
+            with self.assertRaisesRegex(GoldMinerError, "missing worker configuration"):
+                server.get_service()
+            self.assertEqual(calls, 1)
+        finally:
+            server.server_close()
 
 
 class SubprocessRunnerTests(unittest.TestCase):

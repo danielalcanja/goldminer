@@ -48,11 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     try:
         load_dotenv(project_dotenv())
-        service = _service()
         if args.command == "serve":
             if not 1 <= args.port <= 65535:
                 raise GoldMinerError("--port must be between 1 and 65535")
-            serve(service, args.host, args.port)
+            serve(_service, args.host, args.port)
             return 0
 
         try:
@@ -61,7 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise GoldMinerError(f"Could not read job file: {exc}") from exc
         if not isinstance(payload, dict):
             raise GoldMinerError("Job file must contain a JSON object")
-        result = service.run(JobSpec.from_mapping(payload))
+        result = _service().run(JobSpec.from_mapping(payload))
         print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2))
         return 0
     except GoldMinerError as exc:

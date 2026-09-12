@@ -48,6 +48,25 @@ function json(value: unknown, status = 200): Response {
   });
 }
 
+async function containerResult(
+  response: Response,
+): Promise<ContainerSuccess | ContainerFailure> {
+  const body = await response.text();
+  let result: unknown;
+  try {
+    result = JSON.parse(body);
+  } catch {
+    const detail = body.trim().replace(/\s+/g, " ").slice(0, 500) || "empty response";
+    throw new Error(
+      `Container request returned HTTP ${response.status} with a non-JSON response: ${detail}`,
+    );
+  }
+  if (!result || typeof result !== "object") {
+    throw new Error(`Container returned HTTP ${response.status} with an invalid JSON response`);
+  }
+  return result as ContainerSuccess | ContainerFailure;
+}
+
 function authorized(request: Request, secret: string): boolean {
   return request.headers.get("Authorization") === `Bearer ${secret}`;
 }
@@ -143,10 +162,15 @@ export class GoldMinerWorkflow extends WorkflowEntrypoint<Bindings, JobRequest> 
             body: JSON.stringify(event.payload),
           }),
         );
-        const result = await response.json<ContainerSuccess | ContainerFailure>();
+        const result = await containerResult(response);
         if (!response.ok) {
-          const message = "message" in result && result.message ? result.message : "Container job failed";
-          throw new Error(message);
+          const message =
+            "message" in result && result.message
+              ? result.message
+              : "error" in result && result.error
+                ? result.error
+                : "Container job failed";
+          throw new Error(`Container returned HTTP ${response.status}: ${message}`);
         }
         if (!("artifacts" in result)) {
           throw new Error("Container returned an invalid success response");

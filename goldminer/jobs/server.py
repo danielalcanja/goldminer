@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
@@ -19,10 +20,24 @@ _MAX_REQUEST_BYTES = 64 * 1024
 class JobHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], service: JobService) -> None:
-        super().__init__(address, JobRequestHandler)
-        self.service = service
+    def __init__(
+        self,
+        address: tuple[str, int],
+        service_factory: Callable[[], JobService],
+        *,
+        bind_and_activate: bool = True,
+    ) -> None:
+        super().__init__(address, JobRequestHandler, bind_and_activate=bind_and_activate)
+        self._service_factory = service_factory
+        self._service: JobService | None = None
+        self._service_lock = threading.Lock()
         self.job_lock = threading.Lock()
+
+    def get_service(self) -> JobService:
+        with self._service_lock:
+            if self._service is None:
+                self._service = self._service_factory()
+            return self._service
 
 
 class JobRequestHandler(BaseHTTPRequestHandler):
@@ -63,7 +78,7 @@ class JobRequestHandler(BaseHTTPRequestHandler):
 
         self.server.job_lock.acquire()
         try:
-            result = self.server.service.run(spec)
+            result = self.server.get_service().run(spec)
             self._json(200, result.as_dict())
         except GoldMinerError as exc:
             _LOG.exception("Job %s failed", spec.job_id)
@@ -78,8 +93,12 @@ class JobRequestHandler(BaseHTTPRequestHandler):
         _LOG.info("%s - %s", self.address_string(), format % args)
 
 
-def serve(service: JobService, host: str, port: int) -> None:
-    server = JobHTTPServer((host, port), service)
+def serve(
+    service_factory: Callable[[], JobService],
+    host: str,
+    port: int,
+) -> None:
+    server = JobHTTPServer((host, port), service_factory)
     _LOG.info("Gold Miner job worker listening on %s:%s", host, port)
     try:
         server.serve_forever()
