@@ -9,6 +9,7 @@ import {
 const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const OBJECT_KEY_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\)[^\0]+$/;
 const CONTAINER_SLOTS = 3;
+const CONTAINER_SLOT_GENERATION = "v2";
 
 export type JobRequest = {
   schema_version: "1.0";
@@ -121,7 +122,7 @@ function containerSlot(jobId: string): string {
     hash ^= character.charCodeAt(0);
     hash = Math.imul(hash, 16777619);
   }
-  return `slot-${(hash >>> 0) % CONTAINER_SLOTS}`;
+  return `${CONTAINER_SLOT_GENERATION}-slot-${(hash >>> 0) % CONTAINER_SLOTS}`;
 }
 
 async function r2Json(bucket: R2Bucket, key: string): Promise<unknown | null> {
