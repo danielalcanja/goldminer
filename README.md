@@ -8,9 +8,9 @@ Every invocation appends structured diagnostics to `logs/run.jsonl`. The log con
 
 ## Cloudflare background worker
 
-The repository also contains a deployable Cloudflare adapter. It keeps the local `goldminer VIDEO` command unchanged, packages it with FFmpeg in a Linux container, and uses Cloudflare Workflows plus R2 to run one asynchronous video job per container instance.
+The repository also contains a deployable Cloudflare API. It keeps the local `goldminer VIDEO` command unchanged, gives frontends a direct-to-R2 upload flow, packages GoldMiner with FFmpeg in a Linux container, and uses Cloudflare Workflows to run asynchronous video jobs. API v1 returns normalized progress plus streamable and downloadable clip URLs.
 
-See [docs/CLOUDFLARE_DEPLOYMENT.md](docs/CLOUDFLARE_DEPLOYMENT.md) for architecture, setup, deployment, and a complete test request.
+See [docs/CLOUDFLARE_DEPLOYMENT.md](docs/CLOUDFLARE_DEPLOYMENT.md) for architecture, setup, deployment, and a complete test request. The frontend contract is in [docs/OPENAPI.yaml](docs/OPENAPI.yaml).
 
 ## Automatic transcription with OpenAI
 

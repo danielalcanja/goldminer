@@ -1,15 +1,18 @@
 # Gold Miner on Cloudflare
 
-This first hosted layer runs the unchanged Gold Miner CLI inside a Cloudflare Container. It is intentionally a backend job API, not yet the customer-facing upload page or email-delivery layer.
+The hosted layer runs the unchanged Gold Miner CLI inside a Cloudflare Container. API v1 gives a frontend a safe upload-to-results workflow; it is still a backend service rather than the customer-facing page or email-delivery layer.
 
 ## Architecture
 
 ```text
-website or API client
+frontend server
         |
-        | POST /jobs with an existing R2 source key
+        | creates an upload session and starts/polls a job
         v
-Cloudflare Worker ---- reads status/artifacts ----> R2 bucket
+Cloudflare Worker ---- signs upload, reads status/clips ----> R2 bucket
+        ^                                                   ^
+        |                                                   |
+        +------ browser uploads video directly by PUT ------+
         |
         | starts one durable job
         v
@@ -33,7 +36,7 @@ The Workflow is important: a Queue consumer has a 15-minute wall-clock limit, wh
 - `cloudflare/src/index.ts`: authenticated job creation, job status, artifact listing/download, Workflow orchestration, and Container routing.
 - `wrangler.jsonc`: R2, Workflow, Durable Object, and Container bindings.
 
-The app-facing API accepts no filesystem paths. It accepts only validated R2 object keys. The source object is read-only, every job writes beneath `jobs/<job-id>/`, and hosted clip duration is capped at 60 seconds.
+The app-facing v1 API accepts no filesystem paths or arbitrary R2 keys. It accepts an API-created `upload_id`, verifies the uploaded object's size and type, then starts one idempotent job for that upload. The source object is read-only, every job writes beneath `jobs/<job-id>/`, and hosted clip duration is capped at 60 seconds. The original `/jobs` endpoints remain available for trusted operational clients.
 
 ## Prerequisites
 
@@ -78,6 +81,15 @@ npx wrangler secret put R2_ENDPOINT_URL
 
 `API_TOKEN` is a new random value used to protect the temporary backend API. It is not a Cloudflare account token. The future website authentication layer should replace this single shared token before public launch.
 
+Set the allowed frontend origins in `CORS_ORIGINS` in `wrangler.jsonc`, and put the same origins in `cloudflare/r2-cors.json`. Apply the R2 rule after changing it:
+
+```bash
+npx wrangler r2 bucket cors set goldminer-media \
+  --file cloudflare/r2-cors.json
+```
+
+The API Bearer token belongs only in your frontend's server-side environment. Never include it in browser JavaScript. The browser receives only a short-lived R2 URL scoped to one object.
+
 ## Verify and deploy
 
 Check the TypeScript configuration, then deploy the Worker and image:
@@ -95,9 +107,55 @@ Check the public health endpoint:
 curl https://goldminer-jobs.<your-workers-subdomain>.workers.dev/healthz
 ```
 
+## Frontend API workflow
+
+The complete contract is in [`docs/OPENAPI.yaml`](OPENAPI.yaml). A frontend uses this sequence:
+
+1. Its server calls `POST /v1/uploads` with the selected file's name, browser MIME type, and exact byte size.
+2. The browser uploads the file directly to the returned `upload.url` with `PUT` and the returned headers.
+3. Its server calls `POST /v1/uploads/<upload-id>/complete`.
+4. Its server calls `POST /v1/jobs` with the `upload_id`.
+5. It polls `GET /v1/jobs/<job-id>` and displays the returned progress message.
+6. When complete, it calls `GET /v1/jobs/<job-id>/clips` and uses each one-hour playback or download URL. Calling the list endpoint again refreshes expired URLs.
+
+Create an upload session from the frontend server:
+
+```bash
+curl -X POST "$GOLDMINER_API_URL/v1/uploads" \
+  -H "Authorization: Bearer $GOLDMINER_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"filename":"interview.mov","content_type":"video/quicktime","size_bytes":12345678}'
+```
+
+The response includes a one-hour upload URL. The browser must use the exact returned method and headers:
+
+```js
+await fetch(upload.url, {
+  method: upload.method,
+  headers: upload.headers,
+  body: videoFile,
+});
+```
+
+After that upload finishes, verify it and start the job:
+
+```bash
+curl -X POST "$GOLDMINER_API_URL/v1/uploads/<upload-id>/complete" \
+  -H "Authorization: Bearer $GOLDMINER_API_TOKEN"
+
+curl -X POST "$GOLDMINER_API_URL/v1/jobs" \
+  -H "Authorization: Bearer $GOLDMINER_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"upload_id":"<upload-id>"}'
+```
+
+## Legacy operational API
+
+The trusted legacy routes accept an R2 source key directly. They remain available for operations and backwards compatibility.
+
 ## Run the first hosted job
 
-For this backend milestone, upload a test video into R2 with Wrangler. The web app will later replace this with browser-based multipart upload.
+To test the trusted legacy API, upload a video into R2 with Wrangler:
 
 ```bash
 npx wrangler r2 object put \
@@ -161,5 +219,6 @@ Use an ignored `.env.worker` file containing the OpenAI and R2 variables. Never 
 
 - `standard-3` provides 2 vCPU, 8 GiB RAM, and 16 GB ephemeral disk. The source video plus temporary audio and outputs must fit. Large uploads should be rejected or preprocessed before job creation, or the instance type should be raised.
 - Container disk is ephemeral. A failed attempt keeps its job directory so the immediate Workflow retry can use Gold Miner's local `--resume` checkpoints. Cloudflare does not guarantee a Container will run for any fixed period, however, so a host interruption can still restart paid provider work. Persisting per-stage caches to R2 is the next reliability hardening step.
-- The first API assumes the source already exists in R2. Browser multipart upload, user accounts, quotas, billing, email notification, retention/deletion, and abuse controls belong in the web-app milestone.
+- API v1 supports a single direct PUT up to 5 GiB. Resumable multipart uploads are still needed for unreliable connections and videos larger than 5 GiB.
+- User accounts, quotas, billing, email notification, retention/deletion, and abuse controls belong in the web-app milestone.
 - The API token is intentionally simple for private testing. Do not expose this Worker publicly as a multi-user product until per-user authentication and authorization are added.

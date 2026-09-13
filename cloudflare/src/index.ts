@@ -5,6 +5,23 @@ import {
   type WorkflowEvent,
   type WorkflowStep,
 } from "cloudflare:workers";
+import {
+  ApiError,
+  addCors,
+  apiErrorResponse,
+  apiJson,
+  assignUploadJob,
+  completeUpload,
+  corsPreflight,
+  createUpload,
+  getClip,
+  getUpload,
+  listClips,
+  normalizeJobStatus,
+  readJsonBody,
+  validateUploadId,
+  type V1CreateJobBody,
+} from "./api";
 
 const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const OBJECT_KEY_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\)[^\0]+$/;
@@ -68,8 +85,15 @@ async function containerResult(
   return result as ContainerSuccess | ContainerFailure;
 }
 
-function authorized(request: Request, secret: string): boolean {
-  return request.headers.get("Authorization") === `Bearer ${secret}`;
+async function authorized(request: Request, secret: string): Promise<boolean> {
+  const header = request.headers.get("Authorization") ?? "";
+  const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const encoder = new TextEncoder();
+  const [providedHash, expectedHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(provided)),
+    crypto.subtle.digest("SHA-256", encoder.encode(secret)),
+  ]);
+  return crypto.subtle.timingSafeEqual(providedHash, expectedHash);
 }
 
 function objectKey(value: unknown, field: string): string {
@@ -191,6 +215,46 @@ export class GoldMinerWorkflow extends WorkflowEntrypoint<Bindings, JobRequest> 
   }
 }
 
+async function persistQueuedJob(job: JobRequest, bindings: Bindings): Promise<void> {
+  const queued = {
+    schema_version: "1.0",
+    job_id: job.job_id,
+    status: "queued",
+    source_key: job.source_key,
+    updated_at: new Date().toISOString(),
+  };
+  await Promise.all([
+    bindings.MEDIA_BUCKET.put(`${job.result_prefix}/request.json`, JSON.stringify(job), {
+      httpMetadata: { contentType: "application/json" },
+    }),
+    bindings.MEDIA_BUCKET.put(`${job.result_prefix}/status.json`, JSON.stringify(queued), {
+      httpMetadata: { contentType: "application/json" },
+    }),
+  ]);
+}
+
+async function markJobCreationFailed(
+  job: JobRequest,
+  bindings: Bindings,
+  error: unknown,
+): Promise<string> {
+  const message = error instanceof Error ? error.message : "Could not create workflow";
+  const failed = {
+    schema_version: "1.0",
+    job_id: job.job_id,
+    status: "failed",
+    source_key: job.source_key,
+    updated_at: new Date().toISOString(),
+    error: message,
+  };
+  await bindings.MEDIA_BUCKET.put(
+    `${job.result_prefix}/status.json`,
+    JSON.stringify(failed),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+  return message;
+}
+
 async function createJob(request: Request, bindings: Bindings): Promise<Response> {
   let body: CreateJobBody;
   try {
@@ -214,21 +278,7 @@ async function createJob(request: Request, bindings: Bindings): Promise<Response
     return json({ error: `Transcript object not found: ${job.transcript_key}` }, 404);
   }
 
-  const queued = {
-    schema_version: "1.0",
-    job_id: jobId,
-    status: "queued",
-    source_key: job.source_key,
-    updated_at: new Date().toISOString(),
-  };
-  await Promise.all([
-    bindings.MEDIA_BUCKET.put(`${job.result_prefix}/request.json`, JSON.stringify(job), {
-      httpMetadata: { contentType: "application/json" },
-    }),
-    bindings.MEDIA_BUCKET.put(`${job.result_prefix}/status.json`, JSON.stringify(queued), {
-      httpMetadata: { contentType: "application/json" },
-    }),
-  ]);
+  await persistQueuedJob(job, bindings);
 
   try {
     const instance = await bindings.GOLDMINER_WORKFLOW.create({ id: jobId, params: job });
@@ -241,19 +291,65 @@ async function createJob(request: Request, bindings: Bindings): Promise<Response
       202,
     );
   } catch (error) {
-    const failed = {
-      ...queued,
-      status: "failed",
-      updated_at: new Date().toISOString(),
-      error: error instanceof Error ? error.message : "Could not create workflow",
-    };
-    await bindings.MEDIA_BUCKET.put(
-      `${job.result_prefix}/status.json`,
-      JSON.stringify(failed),
-      { httpMetadata: { contentType: "application/json" } },
-    );
-    return json({ error: failed.error }, 500);
+    return json({ error: await markJobCreationFailed(job, bindings, error) }, 500);
   }
+}
+
+async function createV1Job(request: Request, bindings: Bindings): Promise<Response> {
+  const body = await readJsonBody<V1CreateJobBody>(request);
+  const uploadId = validateUploadId(body.upload_id);
+  const upload = await getUpload(uploadId, bindings);
+  if (!upload) {
+    throw new ApiError(404, "upload_not_found", "Upload not found.");
+  }
+  if (upload.status !== "completed") {
+    throw new ApiError(409, "upload_incomplete", "Complete the video upload before starting a job.");
+  }
+  if (upload.job_id) {
+    return getV1Job(upload.job_id, request, bindings);
+  }
+
+  const jobId = uploadId;
+  let job: JobRequest;
+  try {
+    job = parseJob(
+      {
+        source_key: upload.source_key,
+        top_k: body.top_k,
+        max_duration_seconds: body.max_duration_seconds,
+        handle_ms: body.handle_ms,
+      },
+      jobId,
+    );
+  } catch (error) {
+    throw new ApiError(
+      400,
+      "invalid_request",
+      error instanceof Error ? error.message : "Invalid job.",
+    );
+  }
+
+  await persistQueuedJob(job, bindings);
+  try {
+    await bindings.GOLDMINER_WORKFLOW.create({ id: jobId, params: job });
+  } catch (creationError) {
+    try {
+      const existing = await bindings.GOLDMINER_WORKFLOW.get(jobId);
+      await existing.status();
+    } catch {
+      await markJobCreationFailed(job, bindings, creationError);
+      throw new ApiError(500, "job_creation_failed", "GoldMiner could not start this job.");
+    }
+  }
+  await assignUploadJob(uploadId, jobId, bindings);
+  return apiJson(
+    {
+      job_id: jobId,
+      status: "queued",
+      status_url: new URL(`/v1/jobs/${jobId}`, request.url).toString(),
+    },
+    202,
+  );
 }
 
 async function getJob(jobId: string, bindings: Bindings): Promise<Response> {
@@ -269,6 +365,26 @@ async function getJob(jobId: string, bindings: Bindings): Promise<Response> {
     return json({ job_id: jobId, workflow, worker });
   } catch {
     return json({ error: "Job not found" }, 404);
+  }
+}
+
+async function getV1Job(
+  jobId: string,
+  request: Request,
+  bindings: Bindings,
+): Promise<Response> {
+  if (!JOB_ID_PATTERN.test(jobId)) {
+    throw new ApiError(400, "invalid_job_id", "job_id is invalid.");
+  }
+  try {
+    const instance = await bindings.GOLDMINER_WORKFLOW.get(jobId);
+    const [workflow, worker] = await Promise.all([
+      instance.status(),
+      r2Json(bindings.MEDIA_BUCKET, `jobs/${jobId}/status.json`),
+    ]);
+    return apiJson(normalizeJobStatus(jobId, workflow, worker, request.url));
+  } catch {
+    throw new ApiError(404, "job_not_found", "Job not found.");
   }
 }
 
@@ -305,30 +421,109 @@ async function getArtifact(jobId: string, name: string, bindings: Bindings): Pro
   return new Response(object.body, { headers });
 }
 
+async function routeV1(
+  request: Request,
+  url: URL,
+  bindings: Bindings,
+): Promise<Response> {
+  if (request.method === "GET" && url.pathname === "/v1") {
+    return apiJson({
+      name: "GoldMiner API",
+      version: "1",
+      status: "ok",
+      endpoints: {
+        uploads: new URL("/v1/uploads", request.url).toString(),
+        jobs: new URL("/v1/jobs", request.url).toString(),
+      },
+    });
+  }
+  if (request.method === "POST" && url.pathname === "/v1/uploads") {
+    return createUpload(request, bindings);
+  }
+  const completeMatch = url.pathname.match(/^\/v1\/uploads\/([^/]+)\/complete$/);
+  if (request.method === "POST" && completeMatch) {
+    return completeUpload(completeMatch[1], bindings);
+  }
+  if (request.method === "POST" && url.pathname === "/v1/jobs") {
+    return createV1Job(request, bindings);
+  }
+
+  const clipMatch = url.pathname.match(/^\/v1\/jobs\/([^/]+)\/clips\/([^/]+)$/);
+  if (request.method === "GET" && clipMatch) {
+    if (!JOB_ID_PATTERN.test(clipMatch[1])) {
+      throw new ApiError(400, "invalid_job_id", "job_id is invalid.");
+    }
+    return getClip(clipMatch[1], clipMatch[2], request, bindings);
+  }
+  const clipsMatch = url.pathname.match(/^\/v1\/jobs\/([^/]+)\/clips$/);
+  if (request.method === "GET" && clipsMatch) {
+    if (!JOB_ID_PATTERN.test(clipsMatch[1])) {
+      throw new ApiError(400, "invalid_job_id", "job_id is invalid.");
+    }
+    return listClips(clipsMatch[1], bindings);
+  }
+  const jobMatch = url.pathname.match(/^\/v1\/jobs\/([^/]+)$/);
+  if (request.method === "GET" && jobMatch) {
+    return getV1Job(jobMatch[1], request, bindings);
+  }
+  throw new ApiError(404, "not_found", "Endpoint not found.");
+}
+
+async function routeLegacy(
+  request: Request,
+  url: URL,
+  bindings: Bindings,
+): Promise<Response> {
+  if (request.method === "POST" && url.pathname === "/jobs") {
+    return createJob(request, bindings);
+  }
+  const match = url.pathname.match(/^\/jobs\/([^/]+)(?:\/artifacts(?:\/(.+))?)?$/);
+  if (!match || request.method !== "GET") {
+    return json({ error: "Not found" }, 404);
+  }
+  const [, jobId, artifactName] = match;
+  if (url.pathname.endsWith("/artifacts")) {
+    return listArtifacts(jobId, bindings);
+  }
+  if (artifactName) {
+    return getArtifact(jobId, artifactName, bindings);
+  }
+  return getJob(jobId, bindings);
+}
+
 export default {
   async fetch(request: Request, bindings: Bindings): Promise<Response> {
     const url = new URL(request.url);
+    if (request.method === "OPTIONS") {
+      return corsPreflight(request, bindings);
+    }
     if (request.method === "GET" && url.pathname === "/healthz") {
-      return json({ status: "ok" });
+      return addCors(request, json({ status: "ok" }), bindings);
     }
-    if (!authorized(request, bindings.API_TOKEN)) {
-      return json({ error: "Unauthorized" }, 401);
-    }
-    if (request.method === "POST" && url.pathname === "/jobs") {
-      return createJob(request, bindings);
+    if (!(await authorized(request, bindings.API_TOKEN))) {
+      const unauthorized = url.pathname.startsWith("/v1")
+        ? apiJson({
+            error: {
+              code: "unauthorized",
+              message: "A valid Bearer token is required.",
+              request_id: request.headers.get("CF-Ray") ?? crypto.randomUUID(),
+            },
+          }, 401)
+        : json({ error: "Unauthorized" }, 401);
+      return addCors(request, unauthorized, bindings);
     }
 
-    const match = url.pathname.match(/^\/jobs\/([^/]+)(?:\/artifacts(?:\/(.+))?)?$/);
-    if (!match || request.method !== "GET") {
-      return json({ error: "Not found" }, 404);
+    let response: Response;
+    if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) {
+      const requestId = request.headers.get("CF-Ray") ?? crypto.randomUUID();
+      try {
+        response = await routeV1(request, url, bindings);
+      } catch (error) {
+        response = apiErrorResponse(error, requestId);
+      }
+    } else {
+      response = await routeLegacy(request, url, bindings);
     }
-    const [, jobId, artifactName] = match;
-    if (url.pathname.endsWith("/artifacts")) {
-      return listArtifacts(jobId, bindings);
-    }
-    if (artifactName) {
-      return getArtifact(jobId, artifactName, bindings);
-    }
-    return getJob(jobId, bindings);
+    return addCors(request, response, bindings);
   },
-};
+} satisfies ExportedHandler<Bindings>;

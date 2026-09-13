@@ -1,0 +1,264 @@
+openapi: 3.1.0
+info:
+  title: GoldMiner API
+  version: 1.0.0
+  description: Upload long-form video, process it asynchronously, and retrieve social clips.
+servers:
+  - url: https://goldminer-jobs.daniel-c12.workers.dev
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Check service availability
+      responses:
+        "200":
+          description: Service is available
+  /v1/uploads:
+    post:
+      summary: Create a direct video upload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUploadRequest"
+      responses:
+        "201":
+          description: A short-lived R2 PUT URL scoped to one object
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateUploadResponse"
+        "400":
+          $ref: "#/components/responses/ApiError"
+        "413":
+          $ref: "#/components/responses/ApiError"
+  /v1/uploads/{upload_id}/complete:
+    post:
+      summary: Verify that a direct upload finished
+      parameters:
+        - $ref: "#/components/parameters/UploadId"
+      responses:
+        "200":
+          description: Upload is complete and ready for a job
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [upload_id, status, size_bytes]
+                properties:
+                  upload_id: { type: string, format: uuid }
+                  status: { const: completed }
+                  size_bytes: { type: integer }
+        "404":
+          $ref: "#/components/responses/ApiError"
+        "409":
+          $ref: "#/components/responses/ApiError"
+  /v1/jobs:
+    post:
+      summary: Start GoldMiner for a completed upload
+      description: Repeating this request for the same upload returns the same job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJobRequest"
+      responses:
+        "202":
+          description: Job was queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateJobResponse"
+        "200":
+          description: This upload already has a job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "409":
+          $ref: "#/components/responses/ApiError"
+  /v1/jobs/{job_id}:
+    get:
+      summary: Get normalized job status
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Current frontend-safe job status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /v1/jobs/{job_id}/clips:
+    get:
+      summary: List generated MP4 clips
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+      responses:
+        "200":
+          description: Generated clips
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, clips, count]
+                properties:
+                  job_id: { type: string }
+                  count: { type: integer }
+                  clips:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Clip"
+        "404":
+          $ref: "#/components/responses/ApiError"
+  /v1/jobs/{job_id}/clips/{clip_id}:
+    get:
+      summary: Stream or download a clip
+      description: Supports HTTP byte ranges for browser playback and seeking. Add `?download=1` to download.
+      parameters:
+        - $ref: "#/components/parameters/JobId"
+        - name: clip_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: download
+          in: query
+          required: false
+          schema: { type: integer, enum: [1] }
+      responses:
+        "200":
+          description: Complete MP4
+          content:
+            video/mp4: {}
+        "206":
+          description: Requested MP4 byte range
+          content:
+            video/mp4: {}
+        "404":
+          $ref: "#/components/responses/ApiError"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    UploadId:
+      name: upload_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    JobId:
+      name: job_id
+      in: path
+      required: true
+      schema: { type: string }
+  responses:
+    ApiError:
+      description: Request failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+  schemas:
+    CreateUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [filename, content_type, size_bytes]
+      properties:
+        filename:
+          type: string
+          examples: [interview.mov]
+        content_type:
+          type: string
+          enum: [video/mp4, video/quicktime, video/x-m4v, video/webm]
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 5368709120
+    CreateUploadResponse:
+      type: object
+      required: [upload_id, status, upload, complete_url, max_size_bytes]
+      properties:
+        upload_id: { type: string, format: uuid }
+        status: { const: pending }
+        upload:
+          type: object
+          required: [method, url, headers, expires_at]
+          properties:
+            method: { const: PUT }
+            url: { type: string, format: uri }
+            headers:
+              type: object
+              additionalProperties: { type: string }
+            expires_at: { type: string, format: date-time }
+        complete_url: { type: string, format: uri }
+        max_size_bytes: { type: integer }
+    CreateJobRequest:
+      type: object
+      additionalProperties: false
+      required: [upload_id]
+      properties:
+        upload_id: { type: string, format: uuid }
+        top_k: { type: integer, minimum: 1, maximum: 25, default: 8 }
+        max_duration_seconds: { type: integer, minimum: 15, maximum: 60, default: 60 }
+        handle_ms: { type: integer, minimum: 0, maximum: 5000, default: 500 }
+    CreateJobResponse:
+      type: object
+      required: [job_id, status, status_url]
+      properties:
+        job_id: { type: string }
+        status: { const: queued }
+        status_url: { type: string, format: uri }
+    Job:
+      type: object
+      required: [job_id, status, progress]
+      properties:
+        job_id: { type: string }
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        progress:
+          type: object
+          required: [phase, message]
+          properties:
+            phase: { type: string }
+            message: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+        clips_url: { type: string, format: uri }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            retryable: { type: boolean }
+    Clip:
+      type: object
+      required: [clip_id, filename, size_bytes, created_at, playback_url, download_url, url_expires_at]
+      properties:
+        clip_id: { type: string }
+        filename: { type: string }
+        size_bytes: { type: integer }
+        created_at: { type: string, format: date-time }
+        playback_url: { type: string, format: uri }
+        download_url: { type: string, format: uri }
+        url_expires_at: { type: string, format: date-time }
+    ApiError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, request_id]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            details: { type: object, additionalProperties: true }

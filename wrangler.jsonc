@@ -8,7 +8,8 @@
     "enabled": true
   },
   "vars": {
-    "R2_BUCKET": "goldminer-media"
+    "R2_BUCKET": "goldminer-media",
+    "CORS_ORIGINS": "http://localhost:3000,http://localhost:5173"
   },
   "r2_buckets": [
     {
