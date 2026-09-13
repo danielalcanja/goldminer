@@ -9,7 +9,7 @@ import {
 const JOB_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
 const OBJECT_KEY_PATTERN = /^(?!\/)(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\\)[^\0]+$/;
 const CONTAINER_SLOTS = 3;
-const CONTAINER_SLOT_GENERATION = "v2";
+const CONTAINER_SLOT_GENERATION = "v3";
 
 export type JobRequest = {
   schema_version: "1.0";
